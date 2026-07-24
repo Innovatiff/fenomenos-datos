@@ -1,0 +1,106 @@
+# Procesa los datos abiertos de ECMWF (IFS + AIFS) a JSONs e imágenes en
+# rejilla nativa de 0.25°. Un trabajo por centro en paralelo y uno final
+# que junta y publica. Los centros NOAA y GEM se retiraron en la Fase 2
+# (decisión del dueño: la consola es solo-ECMWF y nadie consumía esos
+# datos); el código de proceso sigue en el historial de git.
+name: Datos de modelos
+
+on:
+  schedule:
+    - cron: "50 2,8,14,20 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: modelos
+  cancel-in-progress: true
+
+jobs:
+  centro:
+    strategy:
+      fail-fast: false
+      matrix:
+        centro: [ecmwf, aifs]
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Código
+        uses: actions/checkout@v4
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Dependencias
+        run: pip install -r requirements.txt
+
+      - name: Procesar ${{ matrix.centro }}
+        run: |
+          rm -rf modelos
+          python scripts/build_model_data.py ${{ matrix.centro }}
+
+      - name: Subir resultado
+        uses: actions/upload-artifact@v4
+        with:
+          name: modelos-${{ matrix.centro }}
+          path: modelos/
+          if-no-files-found: warn
+          retention-days: 1
+
+  publicar:
+    needs: centro
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Código
+        uses: actions/checkout@v4
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Dependencias mínimas
+        run: pip install numpy
+
+      - name: Bajar resultados
+        uses: actions/download-artifact@v4
+        with:
+          pattern: modelos-*
+          merge-multiple: true
+          path: modelos
+
+      - name: Componer meta
+        run: python scripts/build_model_data.py --merge
+
+      - name: Publicar
+        run: |
+          git config user.name "fenomenos-bot"
+          git config user.email "bot@users.noreply.github.com"
+          # el robot de 10 min re-escribe main mientras corríamos: se
+          # aparta lo construido, se toma el main fresco y se re-aplica
+          cp -r modelos /tmp/modelos-out
+          publicar () {
+            git fetch origin main
+            git checkout -B main origin/main
+            rm -rf modelos
+            cp -r /tmp/modelos-out modelos
+            git add modelos
+            if git diff --cached --quiet; then
+              echo "sin cambios"
+              return 0
+            fi
+            git commit -m "modelos: $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git push origin main
+          }
+          for i in 1 2 3 4; do
+            publicar && exit 0
+            echo "reintento $i"
+            sleep 8
+          done
+          exit 1

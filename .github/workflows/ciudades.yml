@@ -1,0 +1,48 @@
+# Índice de ciudades (GeoNames). Cambia poco: se reconstruye una vez al
+# mes y a mano cuando haga falta. Comparte el grupo de concurrencia del
+# robot de 10 minutos para no pisarse con sus force-push.
+name: Ciudades GeoNames
+
+on:
+  schedule:
+    - cron: "30 6 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: goes
+  cancel-in-progress: false
+
+jobs:
+  indice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Código y datos actuales
+        uses: actions/checkout@v4
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Construir índice
+        run: python scripts/build_cities.py
+
+      - name: Publicar
+        run: |
+          git config user.name "fenomenos-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add cities
+          if git diff --cached --quiet; then
+            echo "índice sin cambios"
+            exit 0
+          fi
+          git commit -m "ciudades: $(date -u +'%Y-%m-%d')"
+          git push origin HEAD:main || {
+            git fetch origin main
+            git rebase FETCH_HEAD
+            git push origin HEAD:main
+          }
