@@ -1,0 +1,65 @@
+# Geodatos (Fase 3): países/territorios de Natural Earth + índice de
+# búsqueda de ciudades por fragmentos (GeoNames) + índice clásico de
+# respaldo. Cambia poco: una vez al mes y a mano cuando haga falta.
+# Comparte el grupo de concurrencia del robot de 10 minutos.
+name: Geodatos (países y ciudades)
+
+on:
+  schedule:
+    - cron: "30 6 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: goes
+  cancel-in-progress: false
+
+jobs:
+  indice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Código y datos actuales
+        uses: actions/checkout@v4
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Índice clásico (respaldo)
+        run: python scripts/build_cities.py
+
+      - name: Países + índice por fragmentos
+        run: python scripts/build_geodata.py
+
+      - name: Publicar
+        run: |
+          git config user.name "fenomenos-bot"
+          git config user.email "bot@users.noreply.github.com"
+          # los archivos son GENERADOS: nada de rebase (choca add/add);
+          # se toma el main fresco y se re-aplica lo construido encima
+          cp -r cities /tmp/out-cities
+          cp -r geo /tmp/out-geo
+          publicar () {
+            git fetch origin main
+            git checkout -B main origin/main
+            rm -rf cities geo
+            cp -r /tmp/out-cities cities
+            cp -r /tmp/out-geo geo
+            git add cities geo
+            if git diff --cached --quiet; then
+              echo "geodatos sin cambios"
+              return 0
+            fi
+            git commit -m "geodatos: $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git push origin main
+          }
+          for i in 1 2 3 4; do
+            publicar && exit 0
+            echo "reintento $i"
+            sleep 8
+          done
+          exit 1
