@@ -1,0 +1,59 @@
+# Satélite GOES-19 cada ~10 minutos. Repo público → minutos ilimitados.
+# La historia se re-crea en un solo commit (force-push huérfano) para que
+# el repositorio no crezca con cada fotograma.
+name: Satélite GOES
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: goes
+  cancel-in-progress: false
+
+jobs:
+  fotogramas:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Código y datos actuales
+        uses: actions/checkout@v4
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Dependencias
+        run: pip install -r requirements.txt
+
+      - name: Procesar GOES (satélite + lluvia estimada)
+        run: python scripts/build_goes.py
+
+      - name: Procesar MRMS (radar 1 km)
+        run: python scripts/build_mrms.py || echo "radar sin datos esta corrida"
+
+      - name: Procesar GMGSI (mundo, horario)
+        run: python scripts/build_gmgsi.py || echo "mosaico mundial sin datos esta corrida"
+
+      - name: Procesar frentes (análisis de superficie WPC)
+        run: python scripts/build_fronts.py || echo "frentes sin datos esta corrida"
+
+      - name: Publicar (un solo commit)
+        run: |
+          git config user.name "fenomenos-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "sin fotogramas nuevos"
+            exit 0
+          fi
+          git checkout --orphan publicar
+          git commit -m "goes: $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git branch -M publicar main
+          git push --force origin main
