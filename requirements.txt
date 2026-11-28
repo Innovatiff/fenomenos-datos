@@ -1,0 +1,11 @@
+numpy
+scipy
+xarray
+h5netcdf
+h5py
+pillow
+cfgrib
+eccodes
+ecmwf-opendata
+global-land-mask
+scikit-image
